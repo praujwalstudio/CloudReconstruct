@@ -55,13 +55,18 @@ class TemporalTrainer:
 
             self.optimizer.zero_grad()
             losses["total"].backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            self.optimizer.step()
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+                self.optimizer.zero_grad()
+            else:
+                self.optimizer.step()
 
             for k, v in losses.items():
                 total_losses[k] = total_losses.get(k, 0) + v.item() * cloudy.size(0)
 
         n = len(loader.dataset)
+        if n == 0:
+            return {"total": 0.0, "l1": 0.0, "ssim": 0.0, "spectral": 0.0}
         return {k: v / n for k, v in total_losses.items()}
 
     @torch.no_grad()
@@ -87,6 +92,8 @@ class TemporalTrainer:
                 total_losses[k] = total_losses.get(k, 0) + v.item() * cloudy.size(0)
 
         n = len(loader.dataset)
+        if n == 0:
+            return {"total": 0.0, "l1": 0.0, "ssim": 0.0, "spectral": 0.0}
         return {k: v / n for k, v in total_losses.items()}
 
     def fit(self, train_loader: DataLoader, val_loader: DataLoader,

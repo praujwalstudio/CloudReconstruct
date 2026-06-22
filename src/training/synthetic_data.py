@@ -15,7 +15,11 @@ def generate_synthetic_patches(out_dir: Path = None, n_scenes: int = 5,
     scene_names = [f"synth_scene_{i}" for i in range(n_scenes)]
 
     for i, scene_name in enumerate(scene_names):
-        split = "train" if i < int(n_scenes * 0.8) else ("val" if i < int(n_scenes * 0.9) else "test")
+        train_limit = int(n_scenes * 0.8)
+        val_limit = int(n_scenes * 0.9)
+        if val_limit == train_limit and n_scenes >= 3:
+            val_limit = train_limit + 1
+        split = "train" if i < train_limit else ("val" if i < val_limit else "test")
         split_dir = out_dir / split
         split_dir.mkdir(parents=True, exist_ok=True)
 

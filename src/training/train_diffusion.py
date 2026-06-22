@@ -109,7 +109,7 @@ class DiffusionTrainer:
             total_loss += loss.item() * images.size(0)
 
         n = len(loader.dataset)
-        return total_loss / n
+        return total_loss / n if n > 0 else 0.0
 
     @torch.no_grad()
     def validate(self, loader: DataLoader) -> float:
@@ -125,7 +125,7 @@ class DiffusionTrainer:
             total_loss += loss.item() * images.size(0)
 
         n = len(loader.dataset)
-        return total_loss / n
+        return total_loss / n if n > 0 else 0.0
 
     def fit(self, train_loader: DataLoader, val_loader: DataLoader,
             epochs: int = 100, checkpoint_dir: Path = None) -> dict:
