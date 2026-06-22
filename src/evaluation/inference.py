@@ -1,5 +1,7 @@
+import math
 import numpy as np
 import torch
+import torch.nn.functional as F
 from pathlib import Path
 
 from src.config import DENSITY_CKPT, DIFFUSION_CKPT, CHECKPOINTS
@@ -42,6 +44,8 @@ def _numpy_to_tensor(image: np.ndarray, device: str = "cpu",
         tensor = tensor.permute(2, 0, 1)
     if tensor.ndim == 2:
         tensor = tensor.unsqueeze(0)
+    if tensor.shape[0] == 1:
+        tensor = tensor.repeat(3, 1, 1)
     return tensor.unsqueeze(0).to(device)
 
 
@@ -107,6 +111,81 @@ class CloudFreeInference:
 
         return pipeline
 
+    @staticmethod
+    def _need_tiling(tensor: torch.Tensor, max_pixels: int = 262144) -> bool:
+        return tensor.shape[-2] * tensor.shape[-1] > max_pixels
+
+    @staticmethod
+    def _make_blend_weights(size: int, device: torch.device) -> torch.Tensor:
+        center = size // 2
+        dist = (torch.arange(size, device=device).float() - center).abs_().clamp(0, center)
+        w_1d = 0.5 + 0.5 * (1.0 - dist / center)
+        weights = w_1d[:, None] * w_1d[None, :]
+        return weights.view(1, 1, size, size)
+
+    def _extract_patches(self, tensor: torch.Tensor, patch_size: int = 256,
+                         overlap: int = 32) -> tuple[list, list]:
+        stride = patch_size - overlap
+        B, C, H, W = tensor.shape
+        patches, coords = [], []
+        for y in range(0, H, stride):
+            for x in range(0, W, stride):
+                patch = tensor[:, :, y:y + patch_size, x:x + patch_size]
+                if patch.shape[-2] < patch_size or patch.shape[-1] < patch_size:
+                    ph = patch_size - patch.shape[-2]
+                    pw = patch_size - patch.shape[-1]
+                    patch = F.pad(patch, (0, pw, 0, ph), mode="replicate")
+                patches.append(patch)
+                coords.append((y, x))
+        return patches, coords
+
+    def _reconstruct(self, patches: list, coords: list, output_shape: tuple,
+                     patch_size: int, overlap: int) -> torch.Tensor:
+        B, C, H, W = output_shape
+        device = patches[0].device
+        accum = torch.zeros(B, C, H, W, device=device)
+        weight = torch.zeros(B, 1, H, W, device=device)
+        weights = self._make_blend_weights(patch_size, device)
+        for patch, (y, x) in zip(patches, coords):
+            if y >= H or x >= W:
+                continue
+            y_end = min(y + patch_size, H)
+            x_end = min(x + patch_size, W)
+            ph = y_end - y
+            pw = x_end - x
+            accum[:, :, y:y_end, x:x_end] += patch[:, :, :ph, :pw] * weights[:, :, :ph, :pw]
+            weight[:, :, y:y_end, x:x_end] += weights[:, :, :ph, :pw]
+        return accum / (weight + 1e-8)
+
+    def _process_tiled(self, in_tensor: torch.Tensor, sar_tensor: torch.Tensor = None,
+                       ref_tensors: list[torch.Tensor] = None,
+                       patch_size: int = 256, overlap: int = 32) -> tuple[torch.Tensor, torch.Tensor]:
+        in_patches, coords = self._extract_patches(in_tensor, patch_size, overlap)
+        sar_patches = None
+        if sar_tensor is not None:
+            sar_patches, _ = self._extract_patches(sar_tensor, patch_size, overlap)
+        ref_patch_lists = None
+        if ref_tensors is not None:
+            ref_patch_lists = []
+            for ref in ref_tensors:
+                p, _ = self._extract_patches(ref, patch_size, overlap)
+                ref_patch_lists.append(p)
+
+        corrected_patches, density_patches = [], []
+        for i, in_patch in enumerate(in_patches):
+            sar_p = sar_patches[i] if sar_patches else None
+            ref_p = [rl[i] for rl in ref_patch_lists] if ref_patch_lists else None
+            corr, dens, _ = self.pipeline(in_patch, sar_p, ref_p)
+            corrected_patches.append(corr)
+            density_patches.append(dens)
+
+        B, C_in, H_in, W_in = in_tensor.shape
+        corr = self._reconstruct(corrected_patches, coords, (B, corr.shape[1], H_in, W_in),
+                                 patch_size, overlap)
+        dens = self._reconstruct(density_patches, coords, (B, dens.shape[1], H_in, W_in),
+                                 patch_size, overlap)
+        return corr, dens
+
     @torch.no_grad()
     def correct(self, image: np.ndarray, sar: np.ndarray = None,
                 temporal_refs: list[np.ndarray] = None,
@@ -125,9 +204,14 @@ class CloudFreeInference:
         if temporal_refs:
             ref_tensors = [_numpy_to_tensor(r, self.device) for r in temporal_refs]
 
-        corrected_tensor, density_tensor, _ = self.pipeline(
-            in_tensor, sar_tensor, ref_tensors
-        )
+        if self._need_tiling(in_tensor):
+            corrected_tensor, density_tensor = self._process_tiled(
+                in_tensor, sar_tensor, ref_tensors
+            )
+        else:
+            corrected_tensor, density_tensor, _ = self.pipeline(
+                in_tensor, sar_tensor, ref_tensors
+            )
 
         corrected = _tensor_to_numpy(corrected_tensor, image.dtype)
         density = _tensor_to_numpy(density_tensor, np.float32).squeeze(-1)
@@ -138,7 +222,12 @@ class CloudFreeInference:
             )
 
         conf = self.confidence.compute(density)
-        ars = self.readiness.evaluate(conf, corrected, image)
+        ref_image = image
+        if ref_image.ndim == 2:
+            ref_image = np.stack([ref_image] * 3, axis=-1)
+        elif ref_image.ndim == 3 and ref_image.shape[2] == 1:
+            ref_image = np.repeat(ref_image, 3, axis=2)
+        ars = self.readiness.evaluate(conf, corrected, ref_image)
 
         return {
             "corrected": corrected,
