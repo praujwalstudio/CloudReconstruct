@@ -134,8 +134,10 @@ def main():
                 if ref_image.shape != corrected.shape:
                     h, w = corrected.shape[:2]
                     ref_image = resize(ref_image, (h, w), preserve_range=True, anti_aliasing=True)
-                    if ref_image.ndim == 2 and corrected.ndim == 3:
+                    if corrected.ndim == 3 and ref_image.ndim == 2:
                         ref_image = np.stack([ref_image] * corrected.shape[2], axis=-1)
+                    elif ref_image.ndim == 3 and corrected.ndim == 3 and ref_image.shape[2] != corrected.shape[2]:
+                        ref_image = ref_image[:, :, :corrected.shape[2]]
                     ref_image = ref_image.astype(corrected.dtype)
                     st.warning(f"Reference resized to {h}x{w} to match input")
                 cloud_mask = (density > 0.3).astype(np.uint8)
