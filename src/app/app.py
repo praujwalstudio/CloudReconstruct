@@ -7,6 +7,7 @@ import streamlit as st
 import numpy as np
 import rasterio
 from tempfile import NamedTemporaryFile
+from skimage.transform import resize
 
 from src.evaluation.inference import CloudFreeInference
 from src.evaluation.metrics import compute_all_metrics
@@ -129,11 +130,15 @@ def main():
         metrics = {"psnr": None, "sam": None, "ndvi_correlation": None}
         if ref_file is not None:
             ref_image, _ = load_tif(ref_file)
-            if ref_image is not None and ref_image.shape == corrected.shape:
+            if ref_image is not None:
+                if ref_image.shape != corrected.shape:
+                    h, w = corrected.shape[:2]
+                    ref_image = resize(ref_image, (h, w), preserve_range=True, anti_aliasing=True).astype(corrected.dtype)
+                    st.warning(f"Reference resized to {h}x{w} to match input")
                 cloud_mask = (density > 0.3).astype(np.uint8)
                 metrics = compute_all_metrics(corrected, ref_image, mask=cloud_mask)
             else:
-                st.warning("Reference image shape mismatch or could not be loaded")
+                st.warning("Reference image could not be loaded")
 
         mcol1, mcol2, mcol3, mcol4 = st.columns(4)
         mcol1.metric("ARS", f"{ars['ars']:.4f} ({grade})")
