@@ -2,6 +2,8 @@ import numpy as np
 
 
 def ndvi(image: np.ndarray) -> np.ndarray:
+    if image.ndim != 3 or image.shape[2] < 3:
+        return np.zeros(image.shape[:2], dtype=np.float32)
     red = image[..., 1].astype(np.float32)
     nir = image[..., 2].astype(np.float32)
     denom = nir + red + 1e-8
