@@ -9,3 +9,10 @@ checkpoints/
 *.egg-info
 dist/
 build/
+
+# Local development artifacts
+.venv/
+*.log
+debug_*.py
+notebooks/
+run_*.py
