@@ -35,13 +35,47 @@ A 5‑class cloud mask (clear / thin / medium / thick / shadow) and an uncertain
 🔧 Setup
 ---
 
+### Prerequisites
+- Python 3.10+
+- CUDA-capable GPU recommended for training
+
+### Installation
+
 ```bash
+# 1. Clone the repository
 git clone https://github.com/praujwalstudio/CloudReconstruct.git
 cd CloudReconstruct
+
+# 2. Create and activate a virtual environment
+python -m venv .venv
+# Windows (PowerShell):
+.venv\Scripts\Activate.ps1
+# macOS / Linux:
+source .venv/bin/activate
+
+# 3. Install dependencies
 pip install -r requirements.txt
 ```
 
 > **Note**: PyTorch, rasterio, and scikit-image are the key dependencies. CUDA is auto‑detected; falls back to CPU.
+
+### Required Project Structure
+
+Large dataset files and trained model weights (`.pth`) are ignored by version control to keep the repository lightweight. Before training, create these directories in your project root:
+
+```text
+CloudReconstruct/
+├── checkpoints/
+│   ├── correction_model/
+│   ├── density_model/
+│   ├── diffusion_model/
+│   └── temporal_model/
+└── data/
+    ├── raw/
+    └── processed/
+```
+
+Place your raw satellite scenes (e.g., LISS-IV, Sentinel-1 SAR) into `data/raw/`.
 
 ---
 
@@ -87,7 +121,39 @@ ThinCloudCorrection    TemporalFusion    SARConditionalUNet
 🔥 Training
 ---
 
-All four models can be trained with the unified CLI:
+The pipeline has a strict sequential dependency — each model relies on outputs from the previous step. Train in this exact order:
+
+### Step 1: Cloud Density Estimation (`CloudDensityNet`)
+UNet that generates continuous cloud density probability masks from optical bands.
+```bash
+python src/training/train_density.py
+```
+**Output:** `checkpoints/density_model/best_model.pth` (~13 MB)
+
+### Step 2: Thin Cloud Correction (`ThinCloudCorrection`)
+2-layer convolutional network that suppresses thin cloud haze while preserving surface reflectances.
+```bash
+python src/training/train_correction.py
+```
+**Output:** `checkpoints/correction_model/best_model.pth` (~48 KB)
+
+### Step 3: Multi-Temporal Fusion Alignment (`TemporalFusion`)
+Aligns and blends historical multi-temporal reference imagery using optical flow + self-attention.
+```bash
+python src/training/train_temporal.py
+```
+**Output:** `checkpoints/temporal_model/best_model.pth` (~286 KB)
+
+### Step 4: SAR Conditional Diffusion (`SARDiffusionWrapper`)
+Generative model that uses SAR data to reconstruct heavily clouded areas with realistic textures.
+```bash
+python src/training/train_diffusion.py
+```
+**Output:** `checkpoints/diffusion_model/model_epoch_10.pth` (~13 MB)
+
+### Unified CLI
+
+All four models can also be trained together:
 
 ```bash
 # Train all models sequentially (density → correction → temporal → diffusion)
@@ -121,6 +187,8 @@ Training logs and checkpoints are saved under `checkpoints/`.
 
 🏃 Inference
 ---
+
+Once all checkpoints are populated, inference uses **patch-based tiling** — images larger than 512×512 are automatically split into overlapping 256×256 patches, processed independently, and stitched with seamless triangular-weighted blending. Single-channel inputs are replicated to 3 channels, and NDVI/ARS metrics are guarded against insufficient band counts.
 
 ### CLI pipeline
 
