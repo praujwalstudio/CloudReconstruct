@@ -133,7 +133,10 @@ def main():
             if ref_image is not None:
                 if ref_image.shape != corrected.shape:
                     h, w = corrected.shape[:2]
-                    ref_image = resize(ref_image, (h, w), preserve_range=True, anti_aliasing=True).astype(corrected.dtype)
+                    ref_image = resize(ref_image, (h, w), preserve_range=True, anti_aliasing=True)
+                    if ref_image.ndim == 2 and corrected.ndim == 3:
+                        ref_image = np.stack([ref_image] * corrected.shape[2], axis=-1)
+                    ref_image = ref_image.astype(corrected.dtype)
                     st.warning(f"Reference resized to {h}x{w} to match input")
                 cloud_mask = (density > 0.3).astype(np.uint8)
                 metrics = compute_all_metrics(corrected, ref_image, mask=cloud_mask)
