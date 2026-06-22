@@ -1,0 +1,13 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+.pytest_cache
+data/
+checkpoints/
+.env
+.vscode/
+.idea/
+*.egg-info
+dist/
+build/
