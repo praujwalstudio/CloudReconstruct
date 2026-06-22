@@ -91,6 +91,8 @@ class DensityTrainer:
             total_mae += mae_loss(outputs, targets).item() * images.size(0)
 
         n = len(loader.dataset)
+        if n == 0:
+            return {"mse": 0.0, "mae": 0.0, "rmse": 0.0}
         return {"mse": total_mse / n, "mae": total_mae / n, "rmse": np.sqrt(total_mse / n)}
 
     def fit(self, train_loader: DataLoader, val_loader: DataLoader,

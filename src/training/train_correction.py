@@ -37,9 +37,10 @@ class CorrectionTrainer:
                     density = density_model(cloudy)
 
             correction = self.model(cloudy, density if density is not None else torch.zeros_like(cloudy[:, :1]))
-            corrected = cloudy + correction
+            corrected = cloudy + torch.clamp(correction, -1.0, 1.0)
 
             losses = self.loss_fn(corrected, cloudy)
+            losses = {k: torch.nan_to_num(v, nan=0.0, posinf=1.0, neginf=0.0) if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
 
             self.optimizer.zero_grad()
             losses["total"].backward()
@@ -50,6 +51,8 @@ class CorrectionTrainer:
                 total_losses[k] = total_losses.get(k, 0) + v.item() * images.size(0)
 
         n = len(loader.dataset)
+        if n == 0:
+            return {"total": 0.0, "l1": 0.0, "ssim": 0.0, "spectral": 0.0}
         return {k: v / n for k, v in total_losses.items()}
 
     @torch.no_grad()
@@ -68,13 +71,16 @@ class CorrectionTrainer:
                 density = density_model(cloudy)
 
             correction = self.model(cloudy, density if density is not None else torch.zeros_like(cloudy[:, :1]))
-            corrected = cloudy + correction
+            corrected = cloudy + torch.clamp(correction, -1.0, 1.0)
             losses = self.loss_fn(corrected, cloudy)
+            losses = {k: torch.nan_to_num(v, nan=0.0, posinf=1.0, neginf=0.0) if isinstance(v, torch.Tensor) else v for k, v in losses.items()}
 
             for k, v in losses.items():
                 total_losses[k] = total_losses.get(k, 0) + v.item() * images.size(0)
 
         n = len(loader.dataset)
+        if n == 0:
+            return {"total": 0.0, "l1": 0.0, "ssim": 0.0, "spectral": 0.0}
         return {k: v / n for k, v in total_losses.items()}
 
     def fit(self, train_loader: DataLoader, val_loader: DataLoader,
