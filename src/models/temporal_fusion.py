@@ -17,20 +17,22 @@ class AlignmentNet(nn.Module):
     def forward(self, cloudy: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
         x = torch.cat([cloudy, reference], dim=1)
         flow = self.conv(x)
-        flow = torch.tanh(flow) * 10.0
+        flow = torch.tanh(flow) * 5.0
         return flow
 
 
 def apply_flow(image: torch.Tensor, flow: torch.Tensor) -> torch.Tensor:
     b, c, h, w = image.shape
-    grid_y, grid_x = torch.meshgrid(
-        torch.linspace(-1.0, 1.0, h, device=image.device),
-        torch.linspace(-1.0, 1.0, w, device=image.device),
-        indexing="ij",
-    )
-    grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).expand(b, -1, -1, -1)
-    flow_up = flow.permute(0, 2, 3, 1)
-    grid = grid + flow_up / torch.tensor([w, h], device=image.device).view(1, 1, 1, 2)
+    with torch.no_grad():
+        grid_y, grid_x = torch.meshgrid(
+            torch.linspace(-1.0, 1.0, h, device=image.device),
+            torch.linspace(-1.0, 1.0, w, device=image.device),
+            indexing="ij",
+        )
+        grid = torch.stack([grid_x, grid_y], dim=-1).unsqueeze(0).expand(b, -1, -1, -1).contiguous()
+        flow_up = flow.permute(0, 2, 3, 1)
+        grid = grid + flow_up / torch.tensor([w, h], device=image.device).view(1, 1, 1, 2)
+        grid = torch.clamp(grid, -1.0, 1.0)
     return F.grid_sample(image, grid, mode="bilinear", padding_mode="border", align_corners=True)
 
 
