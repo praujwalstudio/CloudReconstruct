@@ -1,0 +1,61 @@
+# ==============================================================================
+# CloudReconstruct: Google Colab & Kaggle Training Configuration
+# Adaptive Multi-Source Cloud Removal with Real Multi-Modal Data
+# ==============================================================================
+
+experiment:
+  name: "cloudreconstruct_sen12ms_colab"
+  seed: 42
+  device: "cuda"
+
+data:
+  dataset_type: "sen12ms_cr"  # 'sen12ms_cr' or 'patches'
+  data_dir: "data/raw/sen12ms_cr"
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  patch_size: 256
+  num_workers: 2
+  pin_memory: true
+  use_dem: true
+  dem_channels: 4
+
+training:
+  batch_size: 16
+  epochs: 50
+  use_amp: true  # Mixed Precision Training via torch.cuda.amp / torch.amp
+  grad_clip: 1.0
+  feature_scale: 1.0  # Feature dimension scale
+  learning_rate: 1.0e-4
+  weight_decay: 1.0e-5
+  scheduler:
+    type: "ReduceLROnPlateau"
+    factor: 0.5
+    patience: 5
+    min_lr: 1.0e-6
+
+losses:
+  l1_weight: 1.0
+  ssim_weight: 1.0
+  spectral_weight: 0.5
+  perceptual_weight: 0.1
+  fjl_weight: 1.0           # Filtered Jaccard Loss weight
+  fjl_gl_type: "GL1"        # 'GL1' (Inverted Jaccard) or 'GL2' (Normalized BCE)
+  ccl_weight: 1.0           # Cloud-Constrained Loss weight
+  ccl_lambda: 1.0           # lambda_ccl factor
+
+augmentations:
+  sdaa:
+    enabled: true
+    probability: 0.5
+    r_min: 5.0
+    r_max: 25.0
+    gamma_min: 1.5
+    gamma_max: 2.5
+
+checkpoints:
+  save_dir: "checkpoints"
+  save_every_epochs: 1
+  mid_session_save_interval_batches: 500  # Mid-epoch checkpoint hook for timeout recovery
+  resume_checkpoint: "checkpoints/latest_checkpoint.pth"  # Auto-resume hook
+  keep_best: true

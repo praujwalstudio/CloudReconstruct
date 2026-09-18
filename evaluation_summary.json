@@ -1,0 +1,10 @@
+{
+  "overall_ssim": 0.532035768032074,
+  "overall_ssim_pct": 53.2035768032074,
+  "overall_ndvi_correlation": 0.4279423455397288,
+  "overall_psnr_db": 11.793741544087728,
+  "overall_sam_deg": 9.7305375734965,
+  "overall_mae": 0.1487956295410792,
+  "overall_mse": 0.06616462891300519,
+  "n_scenes": 6
+}
