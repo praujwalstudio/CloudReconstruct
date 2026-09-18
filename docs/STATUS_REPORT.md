@@ -28,21 +28,20 @@ All **6 architectural upgrade phases (Phases 0 through 5)** are 100% complete an
 
 ---
 
-## 🔄 3. Background Process Status (Dataset Ingestion)
+## 🔄 3. Background Process Status
 
-- **Running Background Task:** `task-537` (`python -m src.data.ingest_hf --limit-scenes 5 --workers 4`)
-- **Dataset Source:** HuggingFace Public Mirror (`Hermanni/sen12mscr`) — 100% free, public, no API keys needed.
-- **Downloaded & Converted Data:**
-  - **Total Real Scenes Ingested:** **20+ full scenes (16.54 GB)**
-  - **Total Real Satellite Patch Pairs:** **15,680+ patch pairs (256×256 pixels)**
+- **Status:** **Completed & Stopped** (No background tasks are running).
+- **Dataset Ingestion Result:**
+  - **Total Real Scenes Ingested:** **21 full scenes (17.51 GB)**
+  - **Total Real Satellite Patch Pairs:** **16,464 patch pairs (256×256 pixels)**
   - **Location on Disk:** `data/raw/sen12ms_cr/compact/`
     - Training Set (14 scenes): `train/spring`, `train/summer`, `train/fall`, `train/winter`
-    - Validation Set (6+ scenes): `val/spring`, `val/summer`, `val/winter`
-- **Automatic Storage Optimization:** Raw temporary parquet files are automatically deleted after `.npz` extraction to keep disk usage bounded.
+    - Validation Set (7 scenes): `val/spring`, `val/summer`, `val/winter`
+- **System Resource State:** 0% background load, machine is completely idle and ready for tomorrow.
 
 ---
 
-## 🧪 4. Verification & Benchmark Status
+## 🌐 4. Real Multi-Modal Satellite Dataset (100% Ready)
 
 1. **Unit & Integration Test Suite:**
    - **Result:** `289 passed, 20 warnings in 38.86s` (`pytest` exit code 0).
