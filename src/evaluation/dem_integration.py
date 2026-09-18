@@ -91,6 +91,11 @@ class TerrainProcessor:
         self.slope, self.aspect = compute_slope_aspect(self.dem, self.resolution)
         return self
 
+    def load_from_array(self, dem_array: np.ndarray):
+        self.dem = dem_array.astype(np.float32)
+        self.slope, self.aspect = compute_slope_aspect(self.dem, self.resolution)
+        return self
+
     def correct(self, image: np.ndarray, sun_zenith: float = np.radians(45),
                 sun_azimuth: float = np.radians(180), method: str = "cosine") -> np.ndarray:
         if self.slope is None or self.aspect is None:

@@ -95,9 +95,9 @@ def align_pair(moving_path: Path, fixed_path: Path, out_path: Path = None) -> di
     matrix, n_matches = find_gcps(fixed_vis, moving_vis)
 
     if matrix is not None:
-        print(f"  ✓ Found {n_matches} good matches. Warping...")
+        print(f"  [MATCH] Found {n_matches} good matches. Warping...")
     else:
-        print(f"  ⚠ Insufficient matches ({n_matches}). Using geotransform-only alignment.")
+        print(f"  [WARN] Insufficient matches ({n_matches}). Using geotransform-only alignment.")
 
     result = warp_to_reference(moving_path, fixed_transform, fixed_crs, fixed_shape, out_path)
 

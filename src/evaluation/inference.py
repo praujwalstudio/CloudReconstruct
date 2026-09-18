@@ -26,7 +26,10 @@ def _load_checkpoint(path, map_location: str = "cpu") -> dict | None:
             return None
     if not path.exists():
         return None
-    return torch.load(path, map_location=map_location, weights_only=False)
+    ckpt = torch.load(path, map_location=map_location, weights_only=False)
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        return ckpt["model_state_dict"]
+    return ckpt
 
 
 def _numpy_to_tensor(image: np.ndarray, device: str = "cpu",
@@ -41,8 +44,9 @@ def _numpy_to_tensor(image: np.ndarray, device: str = "cpu",
         image = image.astype(np.float32)
     tensor = torch.from_numpy(image)
     if tensor.ndim == 3:
-        tensor = tensor.permute(2, 0, 1)
-    if tensor.ndim == 2:
+        if tensor.shape[-1] in (1, 2, 3, 4) and tensor.shape[0] > 4:
+            tensor = tensor.permute(2, 0, 1)
+    elif tensor.ndim == 2:
         tensor = tensor.unsqueeze(0)
     if tensor.shape[0] == 1:
         tensor = tensor.repeat(3, 1, 1)
@@ -51,11 +55,12 @@ def _numpy_to_tensor(image: np.ndarray, device: str = "cpu",
 
 def _tensor_to_numpy(tensor: torch.Tensor, dtype=np.uint16) -> np.ndarray:
     arr = tensor.detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
-    arr = np.clip(arr, 0, 1)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=1.0, neginf=0.0)
+    arr = np.clip(arr, 0.0, 1.0)
     if dtype == np.uint16:
-        arr = (arr * 65535).astype(np.uint16)
+        arr = (arr * 65535.0).astype(np.uint16)
     elif dtype == np.uint8:
-        arr = (arr * 255).astype(np.uint8)
+        arr = (arr * 255.0).astype(np.uint8)
     return arr
 
 
@@ -97,13 +102,14 @@ class CloudFreeInference:
         if density_sd is not None:
             pipeline.density_net.load_state_dict(density_sd, strict=False)
 
-        correction_sd = _load_checkpoint(correction_ckpt or DIFFUSION_CKPT, self.device)
+        correction_sd = _load_checkpoint(correction_ckpt or (CHECKPOINTS / "correction_model" / "best_model.pth"), self.device)
         if correction_sd is not None:
             pipeline.correction_net.load_state_dict(correction_sd, strict=False)
 
         sar_sd = _load_checkpoint(sar_ckpt, self.device)
         if sar_sd is not None:
-            pipeline.sar_fusion.load_state_dict(sar_sd, strict=False)
+            cleaned_sar = {k.replace("unet.", "").replace("module.", ""): v for k, v in sar_sd.items()}
+            pipeline.sar_fusion.load_state_dict(cleaned_sar, strict=False)
 
         temporal_sd = _load_checkpoint(temporal_ckpt, self.device)
         if temporal_sd is not None:
@@ -238,11 +244,11 @@ class CloudFreeInference:
         }
 
     def correct_and_save(self, output_path: Path, image: np.ndarray,
-                         sar: np.ndarray = None,
-                         temporal_refs: list[np.ndarray] = None,
-                         dem_processor=None, profile: dict = None,
-                         metadata: dict = None, sun_zenith: float = 45,
-                         sun_azimuth: float = 180) -> Path:
+                          sar: np.ndarray = None,
+                          temporal_refs: list[np.ndarray] = None,
+                          dem_processor=None, profile: dict = None,
+                          metadata: dict = None, sun_zenith: float = 45,
+                          sun_azimuth: float = 180) -> Path:
         result = self.correct(image, sar, temporal_refs, dem_processor,
                               sun_zenith, sun_azimuth)
         return write_analysis_ready_product(
