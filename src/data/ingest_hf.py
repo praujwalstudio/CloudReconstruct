@@ -151,10 +151,15 @@ def inspect_parquet(parquet_path: Path) -> Tuple[dict, int]:
     if pq is None:
         raise ImportError("pyarrow required: pip install pyarrow")
     table = pq.read_table(parquet_path)
-    row = table.slice(0, 1)
-    sar = np.frombuffer(row["sar"].as_py()[0], dtype=np.float32).reshape(row["sar_shape"].as_py()[0])
-    cloudy = np.frombuffer(row["cloudy"].as_py()[0], dtype=np.int16).reshape(row["opt_shape"].as_py()[0])
-    target = np.frombuffer(row["target"].as_py()[0], dtype=np.int16).reshape(row["opt_shape"].as_py()[0])
+    sar_bytes = table["sar"][0].as_py()
+    cloudy_bytes = table["cloudy"][0].as_py()
+    target_bytes = table["target"][0].as_py()
+    sar_shape = table["sar_shape"][0].as_py()
+    opt_shape = table["opt_shape"][0].as_py()
+
+    sar = np.frombuffer(sar_bytes, dtype=np.float32).reshape(sar_shape)
+    cloudy = np.frombuffer(cloudy_bytes, dtype=np.int16).reshape(opt_shape)
+    target = np.frombuffer(target_bytes, dtype=np.int16).reshape(opt_shape)
     stats = {
         "sar_shape": sar.shape,
         "sar_min": float(sar.min()),
@@ -193,12 +198,19 @@ def convert_parquet_to_npz(
     sar_arr = np.empty((n_rows, 2, 256, 256), dtype=sar_dtype)
     patch_ids = []
 
+    pydict = table.to_pydict()
+    sar_list = pydict["sar"]
+    cloudy_list = pydict["cloudy"]
+    target_list = pydict["target"]
+    sar_shapes = pydict["sar_shape"]
+    opt_shapes = pydict["opt_shape"]
+    patch_list = pydict["patch"]
+
     for i in range(n_rows):
-        row = table.slice(i, 1)
-        sar = np.frombuffer(row["sar"].as_py()[0], dtype=np.float32).reshape(row["sar_shape"].as_py()[0])
-        cloudy = np.frombuffer(row["cloudy"].as_py()[0], dtype=np.int16).reshape(row["opt_shape"].as_py()[0])
-        target = np.frombuffer(row["target"].as_py()[0], dtype=np.int16).reshape(row["opt_shape"].as_py()[0])
-        patch_id = row["patch"].as_py()[0]
+        sar = np.frombuffer(sar_list[i], dtype=np.float32).reshape(sar_shapes[i])
+        cloudy = np.frombuffer(cloudy_list[i], dtype=np.int16).reshape(opt_shapes[i])
+        target = np.frombuffer(target_list[i], dtype=np.int16).reshape(opt_shapes[i])
+        patch_id = patch_list[i]
 
         # Select LISS-IV bands (G=2, R=3, NIR=7) from HWC -> CHW
         cloudy_liss4 = cloudy[:, :, LISS4_INDICES].transpose(2, 0, 1)  # (3, 256, 256)
@@ -206,14 +218,16 @@ def convert_parquet_to_npz(
 
         # SAR: store as inspected dtype (float32 or uint8)
         if sar_dtype == np.uint8:
-            # Assume 0-255 range from original uint8 export
-            sar = np.clip(sar, 0, 255).astype(np.uint8)
+            sar_final = np.clip(sar, 0, 255).astype(np.uint8)
         else:
-            sar = sar.astype(np.float32)
+            sar_final = sar.astype(np.float32)
+
+        if sar_final.ndim == 3 and sar_final.shape[-1] == 2:
+            sar_final = sar_final.transpose(2, 0, 1)  # (2, 256, 256)
 
         cloudy_arr[i] = cloudy_liss4
         target_arr[i] = target_liss4
-        sar_arr[i] = sar
+        sar_arr[i] = sar_final
         patch_ids.append(patch_id)
 
     # Write per-scene npz (uncompressed for fast loading)
