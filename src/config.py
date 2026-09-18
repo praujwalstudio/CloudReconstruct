@@ -1,13 +1,18 @@
+import os
 from pathlib import Path
 
-BASE_DIR = Path(r"C:\Users\COIN\Desktop\Hackathon")
+# Base directory: default to repository root or environment variable
+BASE_DIR = Path(os.environ.get("CLOUDRECONSTRUCT_BASE_DIR", Path(__file__).resolve().parent.parent))
 
 # Raw data
 RAW_DATA = BASE_DIR / "data" / "raw"
+RAW = RAW_DATA
 LISS4_RAW = RAW_DATA / "liss4"
 S1_RAW = RAW_DATA / "sentinel1"
 S2_RAW = RAW_DATA / "sentinel2"
 DEM_RAW = RAW_DATA / "dem"
+# SEN12MS_RAW points to the local multi-modal data (cloudy/clear/sigma0/dem folders)
+SEN12MS_RAW = RAW_DATA
 
 # Processed data
 PROCESSED = BASE_DIR / "data" / "processed"
