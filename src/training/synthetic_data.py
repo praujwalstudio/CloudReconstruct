@@ -1,13 +1,27 @@
+"""Mock Synthetic Data Generator (Test Suite Fixture Only)
+======================================================
+DEPRECATION NOTICE:
+This module is strictly designated as an offline mock-testing fixture for unit tests.
+Active training and validation workflows ingest real multi-modal remote sensing data
+via SEN12MSCRDataset (src/data/sen12ms_dataset.py).
+
+DO NOT import or invoke this module within production training pipelines.
+"""
+
 import json
 import numpy as np
 from pathlib import Path
 from src.config import PATCHES, RANDOM_SEED
 
 
-def generate_synthetic_patches(out_dir: Path = None, n_scenes: int = 5,
-                                patches_per_scene: int = 20,
-                                with_sar: bool = False,
-                                with_temporal_ref: bool = False) -> Path:
+def generate_synthetic_patches(
+    out_dir: Path = None,
+    n_scenes: int = 5,
+    patches_per_scene: int = 20,
+    with_sar: bool = False,
+    with_temporal_ref: bool = False,
+) -> Path:
+    """Mock-testing fixture: generates synthetic numpy patches for offline pytest validation."""
     out_dir = Path(out_dir or PATCHES)
     rng = np.random.default_rng(RANDOM_SEED)
 
@@ -72,8 +86,10 @@ def generate_synthetic_patches(out_dir: Path = None, n_scenes: int = 5,
         "has_sar": with_sar,
         "has_temporal_ref": with_temporal_ref,
     }
-    print(f"[SYNTH] Generated {summary['total']} synthetic patches "
-          f"({summary['train']}/{summary['val']}/{summary['test']} split)"
-          + (" + SAR" if with_sar else "")
-          + (" + temporal refs" if with_temporal_ref else ""))
+    print(
+        f"[SYNTH-FIXTURE] Generated {summary['total']} mock test patches "
+        f"({summary['train']}/{summary['val']}/{summary['test']} split)"
+        + (" + SAR" if with_sar else "")
+        + (" + temporal refs" if with_temporal_ref else "")
+    )
     return out_dir

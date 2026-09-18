@@ -92,7 +92,8 @@ class TestDensityTrainer:
         torch.save(model.state_dict(), tmp_path / "test_model.pth")
         trainer.load_checkpoint(tmp_path / "test_model.pth")
 
-        x = torch.randn(1, 3, 64, 64)
+        device = next(trainer.model.parameters()).device
+        x = torch.randn(1, 3, 64, 64, device=device)
         with torch.no_grad():
             out = trainer.model(x)
         assert out.shape == (1, 1, 64, 64)
