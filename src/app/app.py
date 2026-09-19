@@ -128,8 +128,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def normalize_display(img: np.ndarray) -> np.ndarray:
-    """Normalizes image array to [0.0, 1.0] float64 for display rendering with 2-98% stretch."""
+def normalize_display(img: np.ndarray, is_s2_liss4: bool = True) -> np.ndarray:
+    """Normalizes multi-spectral satellite array to natural True-Color [0.0, 1.0] RGB with 2-98% contrast stretch."""
     arr = img.astype(np.float64)
     if arr.max() > 255.0:
         arr = arr / (10000.0 if arr.max() <= 10000.0 else 65535.0)
@@ -137,17 +137,28 @@ def normalize_display(img: np.ndarray) -> np.ndarray:
         arr = arr / 255.0
     arr = np.clip(arr, 0.0, 1.0)
     
-    # Per-channel percentile stretch for multi-spectral fidelity
+    # If 3-channel LISS-IV/S2 [Green, Red, NIR], map to natural True-Color [Red, Green, Blue]
     if arr.ndim == 3 and arr.shape[-1] >= 3:
-        stretched = np.zeros_like(arr)
-        for c in range(arr.shape[-1]):
-            ch = arr[..., c]
+        g = arr[..., 0]
+        r = arr[..., 1]
+        nir = arr[..., 2]
+        
+        # If NIR has typical vegetation reflectance profile (high contrast with red), construct natural RGB
+        if is_s2_liss4 and nir.mean() > 0.05:
+            b = np.clip(0.80 * g - 0.08 * r, 0.0, 1.0)
+            rgb = np.stack([r, g, b], axis=-1)
+        else:
+            rgb = arr[..., :3]
+
+        stretched = np.zeros_like(rgb)
+        for c in range(3):
+            ch = rgb[..., c]
             p2, p98 = np.percentile(ch, [2, 98])
             if p98 > p2:
                 stretched[..., c] = np.clip((ch - p2) / (p98 - p2), 0.0, 1.0)
             else:
                 stretched[..., c] = ch
-        return stretched.astype(np.float64)
+        return np.clip(stretched, 0.0, 1.0).astype(np.float64)
     
     p2, p98 = np.percentile(arr, [2, 98])
     if p98 > p2:
@@ -459,10 +470,11 @@ def main():
     preset_scene = st.sidebar.selectbox(
         "Load Scene or Upload Single Image:",
         [
-            "Spring Agriculture (ROIs1158 Scene 01)",
-            "Summer Mixed Coastal (ROIs1868 Scene 01)",
-            "Fall Dense Urban (ROIs1970 Scene 01)",
-            "Winter Mountain & Snow (ROIs2017 Scene 01)",
+            "Wide-Swathe Satellite Panorama (Benchmark Scene)",
+            "Spring Agriculture (ROIs1158 Earth Scene)",
+            "Summer Mixed Coastal (ROIs1868 Earth Scene)",
+            "Fall Dense Urban (ROIs1970 Earth Scene)",
+            "Winter Mountain & Snow (ROIs2017 Earth Scene)",
             "Upload Single Image (LISS-IV / S2 / GeoTIFF / PNG / JPG)",
             "Upload Multi-Modal Suite (Optical + SAR + DEM)",
         ],
@@ -487,7 +499,15 @@ def main():
     image, profile = None, None
     sar_data, dem_data, clear_target = None, None, None
 
-    if "Upload" not in preset_scene:
+    if "Wide-Swathe" in preset_scene:
+        wide_npz = Path("data/raw/wide_scenes/wide_metropolitan_benchmark.npz")
+        if wide_npz.exists():
+            data = np.load(wide_npz, allow_pickle=True)
+            image = data["cloudy"].astype(np.float32)
+            clear_target = data["target"].astype(np.float32)
+            sar_data = data["sar"].astype(np.float32)
+
+    elif "Upload" not in preset_scene:
         compact_dir = SEN12MS_COMPACT
         season_map = {
             "Spring": ("spring", "scene_6.npz"),
@@ -513,6 +533,7 @@ def main():
                         sar_data = np.moveaxis(data["sar"][patch_idx], 0, -1).astype(np.float32)
                         loaded_from_compact = True
                         break
+
 
         if not loaded_from_compact:
             raw_cloudy_list = sorted((RAW / "cloudy").glob("*.tif"))
@@ -645,12 +666,9 @@ def main():
         
         with col_anim_left:
             gif_out_path = OUTPUTS / "cloud_removal_animation.gif"
-            if not gif_out_path.exists():
-                with st.spinner("Generating smooth transition animation..."):
-                    generate_clean_transition_gif(image, target_display, gif_out_path)
-            
-            if gif_out_path.exists():
-                st.image(str(gif_out_path), use_container_width=True, caption="Smooth Cross-Dissolve: Cloud-Covered ↔ Cloud-Free Surface")
+            generate_clean_transition_gif(image, target_display, gif_out_path)
+            st.image(str(gif_out_path), width="stretch", caption="Smooth Cross-Dissolve: Real Cloudy Satellite ↔ Cloud-Free Ground Surface")
+
         
         with col_anim_right:
             st.markdown("##### 📥 Export Demonstration Animation")
