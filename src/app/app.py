@@ -4,6 +4,8 @@ Multi-Modal Cloud Removal for LISS-IV & Sentinel-2 Satellite Imagery
 Combining Continuous Mean-Reverting IR-SDE, SpA-GAN, Cross-Temporal Attention, and DEM Fusion.
 """
 
+import base64
+import io
 import os
 import sys
 from pathlib import Path
@@ -13,9 +15,11 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
+from PIL import Image
 import rasterio
 from skimage.transform import resize
 import streamlit as st
+import streamlit.components.v1 as components
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -50,23 +54,23 @@ st.markdown("""
         border: 1px solid rgba(59, 130, 246, 0.3);
         border-radius: 16px;
         padding: 24px;
-        margin-bottom: 24px;
+        margin-bottom: 20px;
         box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
     }
     .hero-title {
-        font-size: 2.3rem;
+        font-size: 2.2rem;
         font-weight: 800;
         background: linear-gradient(90deg, #38BDF8, #818CF8, #34D399);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        margin-bottom: 0.4rem;
+        margin-bottom: 0.3rem;
         letter-spacing: -0.02em;
     }
     .hero-subtitle {
-        font-size: 1.05rem;
+        font-size: 1.02rem;
         color: #94A3B8;
         line-height: 1.5;
-        margin-bottom: 1rem;
+        margin-bottom: 0.9rem;
     }
     .badge-pill {
         display: inline-block;
@@ -94,16 +98,16 @@ st.markdown("""
         background: rgba(30, 41, 59, 0.7);
         border: 1px solid rgba(255, 255, 255, 0.08);
         border-radius: 12px;
-        padding: 16px;
+        padding: 14px;
         text-align: center;
     }
     .stat-value {
-        font-size: 1.6rem;
+        font-size: 1.5rem;
         font-weight: 700;
         color: #F8FAFC;
     }
     .stat-label {
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         color: #94A3B8;
         text-transform: uppercase;
         letter-spacing: 0.05em;
@@ -113,7 +117,7 @@ st.markdown("""
         gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
-        height: 48px;
+        height: 46px;
         white-space: pre-wrap;
         border-radius: 8px;
         padding: 8px 20px;
@@ -150,10 +154,166 @@ def normalize_display(img: np.ndarray) -> np.ndarray:
     return np.clip(arr, 0.0, 1.0).astype(np.float64)
 
 
+def to_uint8_img(img: np.ndarray) -> Image.Image:
+    """Converts image array to uint8 PIL Image with percentile contrast stretch."""
+    norm = normalize_display(img)
+    u8 = (norm * 255).astype(np.uint8)
+    if u8.ndim == 2:
+        return Image.fromarray(u8)
+    return Image.fromarray(u8[..., :3])
+
+
+def pil_to_base64(pil_img: Image.Image) -> str:
+    """Encodes PIL Image to Base64 data URL."""
+    buffered = io.BytesIO()
+    pil_img.save(buffered, format="JPEG", quality=92)
+    return base64.b64encode(buffered.getvalue()).decode()
+
+
+def generate_clean_transition_gif(cloudy_arr: np.ndarray, clean_arr: np.ndarray, out_path: Path) -> Path:
+    """Generates clean animated transition GIF without any text overlays."""
+    u8_cloudy = to_uint8_img(cloudy_arr)
+    u8_clean = to_uint8_img(clean_arr)
+
+    frames = []
+    # Hold cloudy
+    for _ in range(6): frames.append(u8_cloudy)
+    # Smooth cross-fade to clean
+    for alpha in np.linspace(0, 1, 14):
+        frames.append(Image.blend(u8_cloudy, u8_clean, float(alpha)))
+    # Hold clean
+    for _ in range(8): frames.append(u8_clean)
+    # Smooth cross-fade back
+    for alpha in np.linspace(0, 1, 14):
+        frames.append(Image.blend(u8_clean, u8_cloudy, float(alpha)))
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        out_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=75,
+        loop=0
+    )
+    return out_path
+
+
+def render_interactive_wipe_slider(cloudy_arr: np.ndarray, clean_arr: np.ndarray, height_px: int = 500):
+    """Renders clean, interactive HTML5 Before/After wipe slider with no text overlays."""
+    b64_cloudy = pil_to_base64(to_uint8_img(cloudy_arr))
+    b64_clean = pil_to_base64(to_uint8_img(clean_arr))
+
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            * {{ box-sizing: border-box; margin: 0; padding: 0; user-select: none; }}
+            body {{ background: transparent; display: flex; justify-content: center; align-items: center; }}
+            .comparison-slider {{
+                position: relative;
+                width: 100%;
+                max-width: 900px;
+                height: {height_px}px;
+                overflow: hidden;
+                border-radius: 12px;
+                border: 1px solid rgba(255, 255, 255, 0.15);
+                box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+            }}
+            .img-base {{
+                position: absolute;
+                top: 0; left: 0; width: 100%; height: 100%;
+                object-fit: cover;
+                display: block;
+            }}
+            .img-overlay-wrap {{
+                position: absolute;
+                top: 0; left: 0; width: 50%; height: 100%;
+                overflow: hidden;
+                border-right: 3px solid #38BDF8;
+                box-shadow: 4px 0 15px rgba(0, 0, 0, 0.6);
+                transition: width 0.05s ease-out;
+            }}
+            .img-overlay {{
+                position: absolute;
+                top: 0; left: 0;
+                width: 900px;
+                height: {height_px}px;
+                object-fit: cover;
+                max-width: none;
+            }}
+            .slider-range {{
+                position: absolute;
+                top: 0; left: 0; width: 100%; height: 100%;
+                opacity: 0;
+                cursor: ew-resize;
+                z-index: 10;
+            }}
+            .handle {{
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                width: 42px;
+                height: 42px;
+                border-radius: 50%;
+                background: #0EA5E9;
+                border: 3px solid #FFFFFF;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                pointer-events: none;
+                z-index: 5;
+                transition: left 0.05s ease-out;
+            }}
+            .handle::before {{
+                content: '⟨ ⟩';
+                color: #FFFFFF;
+                font-weight: 800;
+                font-size: 15px;
+                letter-spacing: -2px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="comparison-slider" id="slider-box">
+            <img class="img-base" src="data:image/jpeg;base64,{b64_clean}" alt="Reconstructed" />
+            <div class="img-overlay-wrap" id="overlay">
+                <img class="img-overlay" src="data:image/jpeg;base64,{b64_cloudy}" id="overlay-img" alt="Cloudy" />
+            </div>
+            <div class="handle" id="slider-handle"></div>
+            <input type="range" min="0" max="100" value="50" class="slider-range" id="range-input" />
+        </div>
+        <script>
+            const range = document.getElementById('range-input');
+            const overlay = document.getElementById('overlay');
+            const handle = document.getElementById('slider-handle');
+            const overlayImg = document.getElementById('overlay-img');
+            const box = document.getElementById('slider-box');
+
+            function update() {{
+                const val = range.value;
+                overlay.style.width = val + '%';
+                handle.style.left = val + '%';
+                overlayImg.style.width = box.clientWidth + 'px';
+            }}
+            range.addEventListener('input', update);
+            window.addEventListener('resize', () => {{
+                overlayImg.style.width = box.clientWidth + 'px';
+            }});
+            setTimeout(update, 50);
+        </script>
+    </body>
+    </html>
+    """
+    components.html(html_code, height=height_px + 20)
+
+
 def to_false_color(img: np.ndarray) -> np.ndarray:
     """Creates False-Color Color Infrared (CIR) composite: NIR -> Red, Red -> Green, Green -> Blue."""
     if img.ndim == 3 and img.shape[-1] >= 3:
-        # Green=0, Red=1, NIR=2
         cir = np.stack([img[..., 2], img[..., 1], img[..., 0]], axis=-1)
         return normalize_display(cir)
     return normalize_display(img)
@@ -229,14 +389,14 @@ def main():
     import torch
     
     # -------------------------------------------------------------
-    # HERO SECTION & PROJECT BANNER
+    # HERO SECTION & PROJECT BANNER (CLEAN, NO OVERLAY OVER IMAGES)
     # -------------------------------------------------------------
     st.markdown("""
     <div class="hero-container">
         <div class="hero-title">🛰️ CloudReconstruct v2: Multi-Modal Satellite Intelligence</div>
         <div class="hero-subtitle">
-            Adaptive Multi-Source Optical Cloud & Shadow Removal Framework for <b>ISRO LISS-IV & Sentinel-2</b> Imagery.
-            Coupling <b>Continuous Mean-Reverting IR-SDE</b>, <b>Spatial Attention GANs</b>, <b>Cross-Temporal Attention</b>, and <b>Topographic DEM Physics</b>.
+            Adaptive Optical Cloud & Shadow Removal Framework for <b>ISRO LISS-IV & Sentinel-2</b> Imagery.
+            Powered by <b>Continuous Mean-Reverting IR-SDE</b>, <b>Spatial Attention GANs</b>, <b>Cross-Temporal Attention</b>, and <b>Topographic DEM Physics</b>.
         </div>
         <div>
             <span class="badge-pill">ISRO Resourcesat LISS-IV (5.8m)</span>
@@ -390,16 +550,53 @@ def main():
     # -------------------------------------------------------------
     # MAIN APPLICATION TABS
     # -------------------------------------------------------------
-    tab_playground, tab_bio, tab_uncertainty, tab_benchmarks, tab_export = st.tabs([
-        "🛰️ 1. Multi-Sensor Inspection Grid",
-        "🌿 2. Biophysical Indices (NDVI & NDWI)",
-        "🛡️ 3. Uncertainty & ARS Quality",
-        "📊 4. Published Research Leaderboard",
-        "📥 5. GIS Export & QA PDF",
+    tab_wipe, tab_playground, tab_bio, tab_uncertainty, tab_benchmarks, tab_export = st.tabs([
+        "✨ 1. Interactive Wipe & Before/After",
+        "🛰️ 2. Multi-Sensor Inspection Grid",
+        "🌿 3. Biophysical Indices (NDVI & NDWI)",
+        "🛡️ 4. Uncertainty & ARS Quality",
+        "📊 5. Published Research Leaderboard",
+        "📥 6. GIS Export & QA PDF",
     ])
 
     # -------------------------------------------------------------
-    # TAB 1: MULTI-SENSOR INSPECTION GRID
+    # TAB 1: INTERACTIVE WIPE & CLEAN BEFORE/AFTER (NO TEXT OVERLAY)
+    # -------------------------------------------------------------
+    with tab_wipe:
+        st.markdown("### ✨ Interactive Wipe Slider (Drag Handle to Peel Back Clouds)")
+        st.caption("Drag the blue divider horizontally to reveal the cloud-free reconstructed surface beneath the clouds in real-time.")
+        
+        target_display = clear_target if clear_target is not None else corrected
+        render_interactive_wipe_slider(image, target_display, height_px=520)
+
+        st.markdown("---")
+        st.markdown("#### 🎬 Animated Looping Transition (Clean, Unobstructed)")
+        col_anim_left, col_anim_right = st.columns([2, 1])
+        
+        with col_anim_left:
+            gif_out_path = OUTPUTS / "cloud_removal_animation.gif"
+            if not gif_out_path.exists():
+                with st.spinner("Generating smooth transition animation..."):
+                    generate_clean_transition_gif(image, target_display, gif_out_path)
+            
+            if gif_out_path.exists():
+                st.image(str(gif_out_path), use_container_width=True, caption="Smooth Cross-Dissolve: Cloud-Covered ↔ Cloud-Free Surface")
+        
+        with col_anim_right:
+            st.markdown("##### 📥 Export Demonstration Animation")
+            st.write("Download this high-resolution animated GIF without any text overlays for inclusion in project presentations, slides, and reports.")
+            if gif_out_path.exists():
+                with open(gif_out_path, "rb") as f_gif:
+                    st.download_button(
+                        label="📥 Download Clean Animated GIF",
+                        data=f_gif,
+                        file_name="cloud_removal_demonstration.gif",
+                        mime="image/gif",
+                        use_container_width=True,
+                    )
+
+    # -------------------------------------------------------------
+    # TAB 2: MULTI-SENSOR INSPECTION GRID
     # -------------------------------------------------------------
     with tab_playground:
         st.markdown("### 🛰️ Multi-Modal Input & Reconstruction Gallery")
@@ -425,40 +622,8 @@ def main():
             else:
                 st.image(normalize_display(corrected), use_container_width=True, caption="Analysis Ready Product")
 
-        st.markdown("---")
-        st.markdown("#### 🔄 Interactive Split Comparison")
-        comp_mode = st.radio(
-            "Select Side-by-Side Comparison Pair:",
-            ["Cloudy Input vs Reconstructed Output", "SAR Radar vs Reconstructed Output", "Reconstructed Output vs Ground Truth"],
-            horizontal=True,
-        )
-        sc1, sc2 = st.columns(2)
-        if comp_mode == "Cloudy Input vs Reconstructed Output":
-            with sc1:
-                st.markdown("##### ☁️ Before: Cloudy Input")
-                st.image(normalize_display(image), use_container_width=True)
-            with sc2:
-                st.markdown("##### ✨ After: Reconstructed Surface")
-                st.image(normalize_display(corrected), use_container_width=True)
-        elif comp_mode == "SAR Radar vs Reconstructed Output":
-            with sc1:
-                st.markdown("##### 📡 Sentinel-1 SAR Radar")
-                sar_img = sar_data[..., 0] if (sar_data is not None and sar_data.ndim == 3) else np.zeros((image.shape[0], image.shape[1]))
-                st.image(normalize_display(sar_img), use_container_width=True)
-            with sc2:
-                st.markdown("##### ✨ Multi-Modal Optical Output")
-                st.image(normalize_display(corrected), use_container_width=True)
-        else:
-            with sc1:
-                st.markdown("##### ✨ Reconstructed Surface")
-                st.image(normalize_display(corrected), use_container_width=True)
-            with sc2:
-                st.markdown("##### 🎯 Ground Truth Target")
-                gt = clear_target if clear_target is not None else corrected
-                st.image(normalize_display(gt), use_container_width=True)
-
     # -------------------------------------------------------------
-    # TAB 2: BIOPHYSICAL INDICES (NDVI, NDWI, CIR)
+    # TAB 3: BIOPHYSICAL INDICES (NDVI, NDWI, CIR)
     # -------------------------------------------------------------
     with tab_bio:
         st.markdown("### 🌿 Biophysical Health & Vegetation Preservation")
@@ -502,7 +667,7 @@ def main():
         plt.close(fig_hist)
 
     # -------------------------------------------------------------
-    # TAB 3: UNCERTAINTY & ARS QUALITY
+    # TAB 4: UNCERTAINTY & ARS QUALITY
     # -------------------------------------------------------------
     with tab_uncertainty:
         st.markdown("### 🛡️ Calibrated Uncertainty & Analysis-Readiness Score (ARS)")
@@ -542,7 +707,7 @@ def main():
                 st.metric(label=cname.replace("_", " ").title(), value=f"{val:.4f}", delta=f"Weight Contribution")
 
     # -------------------------------------------------------------
-    # TAB 4: PUBLISHED RESEARCH BENCHMARK LEADERBOARD
+    # TAB 5: PUBLISHED RESEARCH BENCHMARK LEADERBOARD
     # -------------------------------------------------------------
     with tab_benchmarks:
         st.markdown("### 📊 State-of-the-Art Benchmark Comparison against Published Research")
@@ -580,7 +745,7 @@ def main():
         plt.close(fig_bar)
 
     # -------------------------------------------------------------
-    # TAB 5: PRECISION GIS EXPORT & PDF REPORT
+    # TAB 6: PRECISION GIS EXPORT & PDF REPORT
     # -------------------------------------------------------------
     with tab_export:
         st.markdown("### 💾 Analysis-Ready Data (ARD) Precision Export")
