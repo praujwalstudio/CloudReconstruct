@@ -617,18 +617,14 @@ def main():
 
         st.markdown("---")
         st.markdown("#### 🎬 Animated Looping Transition (Clean, Unobstructed)")
-        col_anim_left, col_anim_right = st.columns([2, 1])
         
-        with col_anim_left:
-            gif_out_path = OUTPUTS / "cloud_removal_animation.gif"
-            if not gif_out_path.exists():
-                with st.spinner("Generating smooth transition animation..."):
-                    generate_clean_transition_gif(image, target_display, gif_out_path)
-            
-            if gif_out_path.exists():
-                st.image(str(gif_out_path), use_container_width=True, caption="Smooth Cross-Dissolve: Cloud-Covered ↔ Cloud-Free Surface")
+        gif_out_path = OUTPUTS / "cloud_removal_animation.gif"
+        generate_clean_transition_gif(image, target_display, gif_out_path)
+        st.image(str(gif_out_path), use_container_width=True, caption="Smooth Cross-Dissolve: Cloud-Covered ↔ Cloud-Free Surface")
         
-        with col_anim_right:
+        st.markdown("<br>", unsafe_allow_html=True)
+        col_down_center, _ = st.columns([2, 1])
+        with col_down_center:
             st.markdown("##### 📥 Export Demonstration Animation")
             st.write("Download this high-resolution animated GIF without any text overlays for inclusion in project presentations, slides, and reports.")
             if gif_out_path.exists():
@@ -640,6 +636,8 @@ def main():
                         mime="image/gif",
                         use_container_width=True,
                     )
+
+
 
     # -------------------------------------------------------------
     # TAB 2: MULTI-SENSOR INSPECTION GRID
