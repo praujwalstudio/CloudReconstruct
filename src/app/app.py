@@ -655,14 +655,31 @@ def main():
     # -------------------------------------------------------------
     with tab_wipe:
         st.markdown("### ✨ Interactive Wipe Slider (Drag Handle to Peel Back Clouds)")
-        st.caption("Drag the blue divider horizontally to reveal the cloud-free reconstructed surface beneath the clouds in real-time.")
         
-        target_display = clear_target if clear_target is not None else corrected
+        col_wipe_ctrl1, col_wipe_ctrl2 = st.columns([2, 1])
+        with col_wipe_ctrl1:
+            wipe_target_choice = st.radio(
+                "Wipe Slider Right-Side Comparison:",
+                [
+                    "🤖 Our AI Model Reconstructed Output (Live GPU Prediction)",
+                    "🛰️ Ground Truth Target (Cloud-Free Satellite Pass)",
+                ] if clear_target is not None else ["🤖 Our AI Model Reconstructed Output (Live GPU Prediction)"],
+                horizontal=True
+            )
+        with col_wipe_ctrl2:
+            st.caption(f"**Current Quality Score (ARS):** `{ars['ars']:.4f}` (Grade **{grade}**)")
+
+        if "Our AI Model" in wipe_target_choice:
+            target_display = corrected
+        else:
+            target_display = clear_target if clear_target is not None else corrected
+
         render_interactive_wipe_slider(image, target_display, height_px=520)
 
         st.markdown("---")
         st.markdown("#### 🎬 Animated Looping Transition (Clean, Unobstructed)")
         col_anim_left, col_anim_right = st.columns([2, 1])
+
         
         with col_anim_left:
             gif_out_path = OUTPUTS / "cloud_removal_animation.gif"
