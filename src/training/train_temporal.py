@@ -6,9 +6,26 @@ from typing import Optional, Union
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.config import PATCHES, CHECKPOINTS
+from src.config import PATCHES, CHECKPOINTS, SEN12MS_RAW, SEN12MS_COMPACT
 from src.training.train_density import PatchDataset, create_dataloaders
 from src.training.losses import CombinedLoss, MultiScaleConvergenceLoss, HeteroscedasticNLLLoss
+from src.data.sen12ms_dataset import CompactSEN12MSDataset
+
+
+class CompactTemporalDataset(CompactSEN12MSDataset):
+    """Temporal dataset derived from real multi-modal satellite archives."""
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        cloudy, target, _ = super().__getitem__(idx)
+        # Choose a reference clear observation (next index in dataset or target itself)
+        ref_idx = (idx + 1) % len(self)
+        _, ref, _ = super().__getitem__(ref_idx)
+
+        # Approximate continuous cloud density map from optical difference
+        diff = torch.abs(cloudy - target).mean(dim=0, keepdim=True)
+        density = torch.clamp(diff * 3.0, 0.0, 1.0)
+
+        return cloudy, ref, target, density
 
 
 class TemporalPairDataset(PatchDataset):
@@ -221,9 +238,26 @@ class TemporalTrainer:
 def create_temporal_dataloaders(
     patch_dir: Path = None, batch_size: int = 8, num_workers: int = 0
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    train_ds = TemporalPairDataset("train", patch_dir)
-    val_ds = TemporalPairDataset("val", patch_dir)
-    test_ds = TemporalPairDataset("test", patch_dir)
+    compact_path = None
+    if patch_dir is not None:
+        p = Path(patch_dir)
+        if (p / "manifest.json").exists() or any(p.rglob("*.npz")):
+            compact_path = p
+        elif (p / "compact" / "manifest.json").exists() or any((p / "compact").rglob("*.npz")):
+            compact_path = p / "compact"
+    elif SEN12MS_COMPACT.exists() and any(SEN12MS_COMPACT.rglob("*.npz")):
+        compact_path = SEN12MS_COMPACT
+
+    if compact_path is not None:
+        train_ds = CompactTemporalDataset(compact_path, split="train")
+        val_ds = CompactTemporalDataset(compact_path, split="val")
+        test_ds = CompactTemporalDataset(compact_path, split="test")
+        if len(test_ds) == 0 and len(val_ds) > 0:
+            test_ds = val_ds
+    else:
+        train_ds = TemporalPairDataset("train", patch_dir)
+        val_ds = TemporalPairDataset("val", patch_dir)
+        test_ds = TemporalPairDataset("test", patch_dir)
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)

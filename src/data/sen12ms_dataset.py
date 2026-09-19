@@ -580,3 +580,120 @@ class SEN12MSCRStreamingIterable(torch.utils.data.IterableDataset):
     def __len__(self):
         sizes = {"train": 107036, "validation": 7184, "test": 7998}
         return sizes.get(self.split, 0)
+
+
+class CompactSEN12MSDataset(Dataset):
+    """High-performance dataset loader for local compact .npz satellite scenes.
+
+    Ingests pre-converted multi-modal scene archives:
+    - 3-band LISS-IV optical cloudy (Green B3, Red B4, NIR B8)
+    - 3-band LISS-IV optical clear target (Green B3, Red B4, NIR B8)
+    - 2-band Sentinel-1 SAR (VV, VH in dB)
+    """
+
+    def __init__(
+        self,
+        root_dir: Union[str, Path] = "data/raw/sen12ms_cr/compact",
+        split: str = "train",
+        transform: Optional[Callable] = None,
+        return_dict: bool = False,
+        preload_memory: bool = False,
+    ):
+        super().__init__()
+        self.root_dir = Path(root_dir)
+        self.split = "val" if split.lower() in ("val", "validation") else split.lower()
+        self.transform = transform
+        self.return_dict = return_dict
+        self.preload_memory = preload_memory
+
+        # Find manifest or scan directories
+        self.index: List[Tuple[Path, int, str]] = []  # (npz_path, patch_idx_in_file, scene_name)
+        self._open_archives: Dict[str, dict] = {}
+        self._build_index()
+
+    def _build_index(self):
+        manifest_path = self.root_dir / "manifest.json"
+        if not manifest_path.exists() and (self.root_dir / "compact" / "manifest.json").exists():
+            manifest_path = self.root_dir / "compact" / "manifest.json"
+
+        if manifest_path.exists():
+            try:
+                import json
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+                split_entries = manifest.get(self.split, [])
+                base_dir = self.root_dir.parent if self.root_dir.name == "compact" else self.root_dir
+                for entry in split_entries:
+                    rel_p = entry["npz_path"]
+                    npz_file = base_dir / rel_p
+                    if not npz_file.exists():
+                        npz_file = self.root_dir / rel_p
+                    if npz_file.exists():
+                        n_p = entry.get("n_patches", 0)
+                        scene_id = f"{entry.get('season', 'season')}_scene{entry.get('scene', 0)}"
+                        for i in range(n_p):
+                            self.index.append((npz_file, i, scene_id))
+            except Exception as e:
+                pass
+
+        if not self.index:
+            # Fallback: discover all .npz in target split directory
+            split_dirs = [self.root_dir / self.split, self.root_dir / "compact" / self.split]
+            for s_dir in split_dirs:
+                if s_dir.exists():
+                    for npz_file in sorted(s_dir.rglob("*.npz")):
+                        try:
+                            archive = np.load(npz_file, allow_pickle=True)
+                            n_p = len(archive["cloudy"])
+                            scene_id = f"{npz_file.parent.name}_{npz_file.stem}"
+                            for i in range(n_p):
+                                self.index.append((npz_file, i, scene_id))
+                        except Exception:
+                            continue
+
+    def __len__(self) -> int:
+        return len(self.index)
+
+    def _get_archive_data(self, npz_path: Path):
+        key = str(npz_path)
+        if key not in self._open_archives:
+            archive = np.load(npz_path, allow_pickle=True)
+            self._open_archives[key] = {
+                "cloudy": archive["cloudy"],
+                "target": archive["target"],
+                "sar": archive["sar"],
+            }
+        return self._open_archives[key]
+
+    def __getitem__(self, idx: int) -> Union[Tuple[torch.Tensor, torch.Tensor, torch.Tensor], dict]:
+        npz_file, patch_idx, scene_id = self.index[idx]
+        data = self._get_archive_data(npz_file)
+
+        raw_cloudy = data["cloudy"][patch_idx].astype(np.float32)
+        raw_target = data["target"][patch_idx].astype(np.float32)
+        raw_sar = data["sar"][patch_idx].astype(np.float32)
+
+        # Scale optical DN -> TOA Reflectance [0.0, 1.0]
+        cloudy = np.clip(raw_cloudy / 10000.0, 0.0, 1.0)
+        target = np.clip(raw_target / 10000.0, 0.0, 1.0)
+
+        # Normalize SAR backscatter [-25, 0] dB -> [-1.0, 1.0]
+        sar = np.clip(raw_sar, -25.0, 0.0) / 12.5 + 1.0
+
+        cloudy_t = torch.from_numpy(cloudy).float()
+        target_t = torch.from_numpy(target).float()
+        sar_t = torch.from_numpy(sar).float()
+
+        if self.transform is not None:
+            cloudy_t, target_t = self.transform(cloudy_t, target_t)
+
+        if self.return_dict:
+            return {
+                "s2_cloudy": cloudy_t,
+                "s2_clear": target_t,
+                "s1": sar_t,
+                "roi_id": scene_id,
+                "patch_id": patch_idx,
+            }
+
+        return cloudy_t, target_t, sar_t

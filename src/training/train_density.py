@@ -7,7 +7,7 @@ from typing import Optional, Union
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 from tqdm import tqdm
 
-from src.config import PATCHES, CHECKPOINTS, RANDOM_SEED, SEN12MS_RAW
+from src.config import PATCHES, CHECKPOINTS, RANDOM_SEED, SEN12MS_RAW, SEN12MS_COMPACT
 from src.training.losses import FilteredJaccardLoss
 
 
@@ -234,8 +234,6 @@ def create_dataloaders(
     num_workers: int = 0,
     dataset_type: str = "auto",
 ) -> tuple[DataLoader, DataLoader, DataLoader]:
-    patch_path = Path(patch_dir or PATCHES)
-
     if dataset_type == "sen12ms_cr_streaming":
         from src.data.sen12ms_dataset import SEN12MSCRStreamingIterable
         train_ds = SEN12MSCRStreamingIterable(split="train", return_dict=True, shuffle_buffer=10000)
@@ -244,41 +242,52 @@ def create_dataloaders(
         train_loader = DataLoader(train_ds, batch_size=batch_size, num_workers=num_workers)
         val_loader = DataLoader(val_ds, batch_size=batch_size, num_workers=num_workers)
         test_loader = DataLoader(test_ds, batch_size=batch_size, num_workers=num_workers)
-    elif dataset_type == "auto" and patch_path.exists() and any(patch_path.rglob("*.npy")):
-        # Auto-detect patch format (.npy files)
-        train_ds = PatchDataset("train", patch_path)
-        val_ds = PatchDataset("val", patch_path)
-        test_ds = PatchDataset("test", patch_path)
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    elif dataset_type == "sen12ms_cr" or (dataset_type == "auto" and (patch_dir and Path(patch_dir).exists() and any(Path(patch_dir).rglob("*.tif*")))):
-        from src.data.sen12ms_dataset import SEN12MSCRDataset
-        data_root = patch_dir
-        train_ds = SEN12MSCRDataset(data_root, split="train", return_dict=True)
-        val_ds = SEN12MSCRDataset(data_root, split="val", return_dict=True)
-        test_ds = SEN12MSCRDataset(data_root, split="test", return_dict=True)
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    elif dataset_type == "sen12ms_cr" or (dataset_type == "auto" and (SEN12MS_RAW.exists() and any(SEN12MS_RAW.rglob("*.tif*")))):
-        from src.data.sen12ms_dataset import SEN12MSCRDataset
-        data_root = SEN12MS_RAW
-        train_ds = SEN12MSCRDataset(data_root, split="train", return_dict=True)
-        val_ds = SEN12MSCRDataset(data_root, split="val", return_dict=True)
-        test_ds = SEN12MSCRDataset(data_root, split="test", return_dict=True)
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-    else:
-        train_ds = PatchDataset("train", patch_path)
-        val_ds = PatchDataset("val", patch_path)
-        test_ds = PatchDataset("test", patch_path)
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
-        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        return train_loader, val_loader, test_loader
 
+    # 1. If explicit patch_dir has .npy patches, load PatchDataset
+    if patch_dir is not None and Path(patch_dir).exists() and any(Path(patch_dir).rglob("*.npy")):
+        train_ds = PatchDataset("train", Path(patch_dir))
+        val_ds = PatchDataset("val", Path(patch_dir))
+        test_ds = PatchDataset("test", Path(patch_dir))
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        return train_loader, val_loader, test_loader
+
+    # 2. Check compact real .npz dataset
+    compact_path = None
+    if patch_dir is not None:
+        p = Path(patch_dir)
+        if (p / "manifest.json").exists() or any(p.rglob("*.npz")):
+            compact_path = p
+        elif (p / "compact" / "manifest.json").exists() or any((p / "compact").rglob("*.npz")):
+            compact_path = p / "compact"
+    elif SEN12MS_COMPACT.exists() and any(SEN12MS_COMPACT.rglob("*.npz")):
+        compact_path = SEN12MS_COMPACT
+
+    if compact_path is not None:
+        from src.data.sen12ms_dataset import CompactSEN12MSDataset
+        train_ds = CompactSEN12MSDataset(compact_path, split="train", return_dict=True)
+        val_ds = CompactSEN12MSDataset(compact_path, split="val", return_dict=True)
+        test_ds = CompactSEN12MSDataset(compact_path, split="test", return_dict=True)
+        if len(test_ds) == 0 and len(val_ds) > 0:
+            test_ds = val_ds
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+        return train_loader, val_loader, test_loader
+
+    # 3. GeoTIFF dataset fallback
+    data_root = patch_dir if (patch_dir and Path(patch_dir).exists() and any(Path(patch_dir).rglob("*.tif*"))) else SEN12MS_RAW
+    from src.data.sen12ms_dataset import SEN12MSCRDataset
+    train_ds = SEN12MSCRDataset(data_root, split="train", return_dict=True)
+    val_ds = SEN12MSCRDataset(data_root, split="val", return_dict=True)
+    test_ds = SEN12MSCRDataset(data_root, split="test", return_dict=True)
+    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
+    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
+    test_loader = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
     return train_loader, val_loader, test_loader
+
 
 
 if __name__ == "__main__":

@@ -3,22 +3,19 @@ import yaml
 import torch
 from pathlib import Path
 
-from src.config import PATCHES, CHECKPOINTS, SEN12MS_RAW
+from src.config import PATCHES, CHECKPOINTS, SEN12MS_RAW, SEN12MS_COMPACT
 from src.training.train_density import DensityTrainer, create_dataloaders
 from src.training.train_correction import CorrectionTrainer
 from src.training.train_temporal import TemporalTrainer, create_temporal_dataloaders
 from src.training.train_diffusion import DiffusionTrainer, DiffusionSchedule
-from src.training.synthetic_data import generate_synthetic_patches
 
 
 def get_patch_dir() -> Path:
+    if SEN12MS_COMPACT.exists() and any(SEN12MS_COMPACT.rglob("*.npz")):
+        return SEN12MS_COMPACT
     if SEN12MS_RAW.exists() and any(SEN12MS_RAW.rglob("*.tif*")):
         return SEN12MS_RAW
-    patch_dir = PATCHES
-    if not patch_dir.exists() or not any(patch_dir.rglob("*.npy")):
-        print("[DATA] No patches or SEN12MS dataset found. Generating mock test fixture...")
-        patch_dir = generate_synthetic_patches()
-    return patch_dir
+    return SEN12MS_COMPACT
 
 
 def train_density(args):

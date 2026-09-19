@@ -13,6 +13,7 @@ S2_RAW = RAW_DATA / "sentinel2"
 DEM_RAW = RAW_DATA / "dem"
 # SEN12MS_RAW points to the local multi-modal data (cloudy/clear/sigma0/dem folders)
 SEN12MS_RAW = RAW_DATA
+SEN12MS_COMPACT = RAW_DATA / "sen12ms_cr" / "compact"
 
 # Processed data
 PROCESSED = BASE_DIR / "data" / "processed"
