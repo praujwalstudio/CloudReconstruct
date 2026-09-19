@@ -34,20 +34,17 @@ def _load_checkpoint(path, map_location: str = "cpu") -> dict | None:
 
 def _numpy_to_tensor(image: np.ndarray, device: str = "cpu",
                      data_max: float = None) -> torch.Tensor:
-    image = image.astype(np.float32)
-    if data_max is not None and data_max > 0:
-        image = image / float(data_max)
-    elif image.max() > 255.0:
-        image = image / (10000.0 if image.max() <= 10000.0 else 65535.0)
-    elif image.max() > 1.0:
-        image = image / 255.0
-    image = np.clip(image, 0.0, 1.0)
-
+    if data_max is not None:
+        image = image.astype(np.float32) / float(data_max)
+    elif image.dtype == np.uint16:
+        image = image.astype(np.float32) / 65535.0
+    elif image.dtype == np.uint8:
+        image = image.astype(np.float32) / 255.0
+    else:
+        image = image.astype(np.float32)
     tensor = torch.from_numpy(image)
     if tensor.ndim == 3:
         if tensor.shape[-1] in (1, 2, 3, 4) and tensor.shape[0] > 4:
-            tensor = tensor.permute(2, 0, 1)
-        elif tensor.shape[-1] in (1, 2, 3, 4) and tensor.shape[0] <= 4:
             tensor = tensor.permute(2, 0, 1)
     elif tensor.ndim == 2:
         tensor = tensor.unsqueeze(0)

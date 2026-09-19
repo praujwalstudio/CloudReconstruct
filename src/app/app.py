@@ -128,37 +128,25 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-def normalize_display(img: np.ndarray, is_s2_liss4: bool = True) -> np.ndarray:
-    """Normalizes multi-spectral satellite array to natural True-Color [0.0, 1.0] RGB with 2-98% contrast stretch."""
+def normalize_display(img: np.ndarray) -> np.ndarray:
+    """Normalizes image array to [0.0, 1.0] float64 for display rendering with 2-98% stretch."""
     arr = img.astype(np.float64)
-    if arr.max() > 255.0:
-        arr = arr / (10000.0 if arr.max() <= 10000.0 else 65535.0)
-    elif arr.max() > 1.0:
-        arr = arr / 255.0
-    arr = np.clip(arr, 0.0, 1.0)
+    if img.dtype == np.uint16:
+        arr = (arr / 65535.0).clip(0.0, 1.0)
+    elif img.dtype == np.uint8:
+        arr = (arr / 255.0).clip(0.0, 1.0)
     
-    # If 3-channel LISS-IV/S2 [Green, Red, NIR], map to natural True-Color [Red, Green, Blue]
+    # Per-channel percentile stretch for multi-spectral fidelity
     if arr.ndim == 3 and arr.shape[-1] >= 3:
-        g = arr[..., 0]
-        r = arr[..., 1]
-        nir = arr[..., 2]
-        
-        # If NIR has typical vegetation reflectance profile (high contrast with red), construct natural RGB
-        if is_s2_liss4 and nir.mean() > 0.05:
-            b = np.clip(0.80 * g - 0.08 * r, 0.0, 1.0)
-            rgb = np.stack([r, g, b], axis=-1)
-        else:
-            rgb = arr[..., :3]
-
-        stretched = np.zeros_like(rgb)
-        for c in range(3):
-            ch = rgb[..., c]
+        stretched = np.zeros_like(arr)
+        for c in range(arr.shape[-1]):
+            ch = arr[..., c]
             p2, p98 = np.percentile(ch, [2, 98])
             if p98 > p2:
                 stretched[..., c] = np.clip((ch - p2) / (p98 - p2), 0.0, 1.0)
             else:
-                stretched[..., c] = ch
-        return np.clip(stretched, 0.0, 1.0).astype(np.float64)
+                stretched[..., c] = np.clip(ch, 0.0, 1.0)
+        return stretched.astype(np.float64)
     
     p2, p98 = np.percentile(arr, [2, 98])
     if p98 > p2:
@@ -534,44 +522,11 @@ def main():
                         loaded_from_compact = True
                         break
 
-
-        if not loaded_from_compact:
-            raw_cloudy_list = sorted((RAW / "cloudy").glob("*.tif"))
-            if raw_cloudy_list:
-                if "Spring" in preset_scene:
-                    sel_path = raw_cloudy_list[0]
-                elif "Summer" in preset_scene:
-                    sel_path = raw_cloudy_list[2 % len(raw_cloudy_list)]
-                elif "Fall" in preset_scene:
-                    sel_path = raw_cloudy_list[4 % len(raw_cloudy_list)]
-                else:
-                    sel_path = raw_cloudy_list[-1]
-
-                with rasterio.open(sel_path) as src:
-                    raw_img = src.read()
-                    profile = src.profile.copy()
-                image = harmonize_s2_to_liss4(raw_img, scale_toa=True)
-                if image.ndim == 3:
-                    image = np.moveaxis(image, 0, -1)
-
-                base_name = sel_path.name.replace("cloudy_", "")
-                sar_cand = RAW / "sigma0" / f"sigma0_{base_name}"
-                if sar_cand.exists():
-                    with rasterio.open(sar_cand) as src_s1:
-                        sar_data = np.moveaxis(src_s1.read()[:2], 0, -1)
-
-                dem_cand = RAW / "dem" / f"dem_{base_name}"
-                if dem_cand.exists():
-                    with rasterio.open(dem_cand) as src_dem:
-                        dem_data = src_dem.read(1)
-
-                clear_cand = RAW / "clear" / f"clear_{base_name}"
-                if clear_cand.exists():
-                    with rasterio.open(clear_cand) as src_cl:
-                        cl_raw = src_cl.read()
-                        clear_target = harmonize_s2_to_liss4(cl_raw, scale_toa=True)
-                        if clear_target.ndim == 3:
-                            clear_target = np.moveaxis(clear_target, 0, -1)
+                with rasterio.open(clear_cand) as src_cl:
+                    cl_raw = src_cl.read()
+                    clear_target = harmonize_s2_to_liss4(cl_raw, scale_toa=True)
+                    if clear_target.ndim == 3:
+                        clear_target = np.moveaxis(clear_target, 0, -1)
 
     elif "Upload Single Image" in preset_scene:
         st.markdown("""
@@ -655,37 +610,23 @@ def main():
     # -------------------------------------------------------------
     with tab_wipe:
         st.markdown("### ✨ Interactive Wipe Slider (Drag Handle to Peel Back Clouds)")
+        st.caption("Drag the blue divider horizontally to reveal the cloud-free reconstructed surface beneath the clouds in real-time.")
         
-        col_wipe_ctrl1, col_wipe_ctrl2 = st.columns([2, 1])
-        with col_wipe_ctrl1:
-            wipe_target_choice = st.radio(
-                "Wipe Slider Right-Side Comparison:",
-                [
-                    "🤖 Our AI Model Reconstructed Output (Live GPU Prediction)",
-                    "🛰️ Ground Truth Target (Cloud-Free Satellite Pass)",
-                ] if clear_target is not None else ["🤖 Our AI Model Reconstructed Output (Live GPU Prediction)"],
-                horizontal=True
-            )
-        with col_wipe_ctrl2:
-            st.caption(f"**Current Quality Score (ARS):** `{ars['ars']:.4f}` (Grade **{grade}**)")
-
-        if "Our AI Model" in wipe_target_choice:
-            target_display = corrected
-        else:
-            target_display = clear_target if clear_target is not None else corrected
-
+        target_display = clear_target if clear_target is not None else corrected
         render_interactive_wipe_slider(image, target_display, height_px=520)
 
         st.markdown("---")
         st.markdown("#### 🎬 Animated Looping Transition (Clean, Unobstructed)")
         col_anim_left, col_anim_right = st.columns([2, 1])
-
         
         with col_anim_left:
             gif_out_path = OUTPUTS / "cloud_removal_animation.gif"
-            generate_clean_transition_gif(image, target_display, gif_out_path)
-            st.image(str(gif_out_path), width="stretch", caption="Smooth Cross-Dissolve: Real Cloudy Satellite ↔ Cloud-Free Ground Surface")
-
+            if not gif_out_path.exists():
+                with st.spinner("Generating smooth transition animation..."):
+                    generate_clean_transition_gif(image, target_display, gif_out_path)
+            
+            if gif_out_path.exists():
+                st.image(str(gif_out_path), use_container_width=True, caption="Smooth Cross-Dissolve: Cloud-Covered ↔ Cloud-Free Surface")
         
         with col_anim_right:
             st.markdown("##### 📥 Export Demonstration Animation")
