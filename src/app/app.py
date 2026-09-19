@@ -131,10 +131,11 @@ st.markdown("""
 def normalize_display(img: np.ndarray) -> np.ndarray:
     """Normalizes image array to [0.0, 1.0] float64 for display rendering with 2-98% stretch."""
     arr = img.astype(np.float64)
-    if img.dtype == np.uint16:
-        arr = (arr / 65535.0).clip(0.0, 1.0)
-    elif img.dtype == np.uint8:
-        arr = (arr / 255.0).clip(0.0, 1.0)
+    if arr.max() > 255.0:
+        arr = arr / (10000.0 if arr.max() <= 10000.0 else 65535.0)
+    elif arr.max() > 1.0:
+        arr = arr / 255.0
+    arr = np.clip(arr, 0.0, 1.0)
     
     # Per-channel percentile stretch for multi-spectral fidelity
     if arr.ndim == 3 and arr.shape[-1] >= 3:
@@ -145,7 +146,7 @@ def normalize_display(img: np.ndarray) -> np.ndarray:
             if p98 > p2:
                 stretched[..., c] = np.clip((ch - p2) / (p98 - p2), 0.0, 1.0)
             else:
-                stretched[..., c] = np.clip(ch, 0.0, 1.0)
+                stretched[..., c] = ch
         return stretched.astype(np.float64)
     
     p2, p98 = np.percentile(arr, [2, 98])
@@ -487,42 +488,69 @@ def main():
     sar_data, dem_data, clear_target = None, None, None
 
     if "Upload" not in preset_scene:
-        raw_cloudy_list = sorted((RAW / "cloudy").glob("*.tif"))
-        if raw_cloudy_list:
-            if "Spring" in preset_scene:
-                sel_path = raw_cloudy_list[0]
-            elif "Summer" in preset_scene:
-                sel_path = raw_cloudy_list[2 % len(raw_cloudy_list)]
-            elif "Fall" in preset_scene:
-                sel_path = raw_cloudy_list[4 % len(raw_cloudy_list)]
-            else:
-                sel_path = raw_cloudy_list[-1]
+        compact_dir = SEN12MS_COMPACT
+        season_map = {
+            "Spring": ("spring", "scene_6.npz"),
+            "Summer": ("summer", "scene_11.npz"),
+            "Fall": ("fall", "scene_11.npz"),
+            "Winter": ("winter", "scene_21.npz"),
+        }
+        loaded_from_compact = False
+        if compact_dir.exists():
+            for s_key, (s_sub, s_file) in season_map.items():
+                if s_key in preset_scene:
+                    npz_cand = compact_dir / "train" / s_sub / s_file
+                    if not npz_cand.exists():
+                        found = list((compact_dir / "train" / s_sub).glob("*.npz"))
+                        if found:
+                            npz_cand = found[0]
+                    if npz_cand.exists():
+                        data = np.load(npz_cand, allow_pickle=True)
+                        total_p = len(data["cloudy"])
+                        patch_idx = st.sidebar.slider(f"Select {s_key} Earth Patch:", 0, total_p - 1, min(15, total_p - 1))
+                        image = np.moveaxis(data["cloudy"][patch_idx], 0, -1).astype(np.float32)
+                        clear_target = np.moveaxis(data["target"][patch_idx], 0, -1).astype(np.float32)
+                        sar_data = np.moveaxis(data["sar"][patch_idx], 0, -1).astype(np.float32)
+                        loaded_from_compact = True
+                        break
 
-            with rasterio.open(sel_path) as src:
-                raw_img = src.read()
-                profile = src.profile.copy()
-            image = harmonize_s2_to_liss4(raw_img, scale_toa=True)
-            if image.ndim == 3:
-                image = np.moveaxis(image, 0, -1)
+        if not loaded_from_compact:
+            raw_cloudy_list = sorted((RAW / "cloudy").glob("*.tif"))
+            if raw_cloudy_list:
+                if "Spring" in preset_scene:
+                    sel_path = raw_cloudy_list[0]
+                elif "Summer" in preset_scene:
+                    sel_path = raw_cloudy_list[2 % len(raw_cloudy_list)]
+                elif "Fall" in preset_scene:
+                    sel_path = raw_cloudy_list[4 % len(raw_cloudy_list)]
+                else:
+                    sel_path = raw_cloudy_list[-1]
 
-            base_name = sel_path.name.replace("cloudy_", "")
-            sar_cand = RAW / "sigma0" / f"sigma0_{base_name}"
-            if sar_cand.exists():
-                with rasterio.open(sar_cand) as src_s1:
-                    sar_data = np.moveaxis(src_s1.read()[:2], 0, -1)
+                with rasterio.open(sel_path) as src:
+                    raw_img = src.read()
+                    profile = src.profile.copy()
+                image = harmonize_s2_to_liss4(raw_img, scale_toa=True)
+                if image.ndim == 3:
+                    image = np.moveaxis(image, 0, -1)
 
-            dem_cand = RAW / "dem" / f"dem_{base_name}"
-            if dem_cand.exists():
-                with rasterio.open(dem_cand) as src_dem:
-                    dem_data = src_dem.read(1)
+                base_name = sel_path.name.replace("cloudy_", "")
+                sar_cand = RAW / "sigma0" / f"sigma0_{base_name}"
+                if sar_cand.exists():
+                    with rasterio.open(sar_cand) as src_s1:
+                        sar_data = np.moveaxis(src_s1.read()[:2], 0, -1)
 
-            clear_cand = RAW / "clear" / f"clear_{base_name}"
-            if clear_cand.exists():
-                with rasterio.open(clear_cand) as src_cl:
-                    cl_raw = src_cl.read()
-                    clear_target = harmonize_s2_to_liss4(cl_raw, scale_toa=True)
-                    if clear_target.ndim == 3:
-                        clear_target = np.moveaxis(clear_target, 0, -1)
+                dem_cand = RAW / "dem" / f"dem_{base_name}"
+                if dem_cand.exists():
+                    with rasterio.open(dem_cand) as src_dem:
+                        dem_data = src_dem.read(1)
+
+                clear_cand = RAW / "clear" / f"clear_{base_name}"
+                if clear_cand.exists():
+                    with rasterio.open(clear_cand) as src_cl:
+                        cl_raw = src_cl.read()
+                        clear_target = harmonize_s2_to_liss4(cl_raw, scale_toa=True)
+                        if clear_target.ndim == 3:
+                            clear_target = np.moveaxis(clear_target, 0, -1)
 
     elif "Upload Single Image" in preset_scene:
         st.markdown("""
