@@ -332,31 +332,55 @@ def get_inference_model():
     )
 
 
-def read_uploaded_geotiff(uploaded_file) -> tuple[np.ndarray, dict]:
-    """Reads uploaded GeoTIFF file into array and metadata profile."""
+def read_uploaded_image(uploaded_file) -> tuple[np.ndarray, dict | None]:
+    """Reads uploaded satellite or standard image (GeoTIFF, PNG, JPG, NPZ) into array and metadata profile."""
     if uploaded_file is None:
         return None, None
-    with NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
-        tmp.write(uploaded_file.getvalue())
-        tmp_path = tmp.name
+    fname = uploaded_file.name.lower()
 
-    with rasterio.open(tmp_path) as src:
-        image = src.read()
-        profile = src.profile.copy()
+    if fname.endswith((".tif", ".tiff")):
+        with NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+            tmp.write(uploaded_file.getvalue())
+            tmp_path = tmp.name
 
-    if image.ndim == 3:
-        if image.shape[0] == 13:
-            image = harmonize_s2_to_liss4(image, scale_toa=True)
-            if image.ndim == 3:
+        with rasterio.open(tmp_path) as src:
+            image = src.read()
+            profile = src.profile.copy()
+
+        if image.ndim == 3:
+            if image.shape[0] == 13:
+                image = harmonize_s2_to_liss4(image, scale_toa=True)
+                if image.ndim == 3:
+                    image = np.moveaxis(image, 0, -1)
+            elif image.shape[0] in (2, 3, 4):
                 image = np.moveaxis(image, 0, -1)
-        elif image.shape[0] in (2, 3, 4):
-            image = np.moveaxis(image, 0, -1)
-        else:
-            image = np.moveaxis(image, 0, -1)
-    elif image.ndim == 2:
-        image = np.stack([image] * 3, axis=-1)
+            else:
+                image = np.moveaxis(image, 0, -1)
+        elif image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+        return image, profile
 
-    return image, profile
+    elif fname.endswith(".npz"):
+        data = np.load(io.BytesIO(uploaded_file.getvalue()))
+        if "s2" in data:
+            arr = data["s2"]
+        elif "cloudy" in data:
+            arr = data["cloudy"]
+        elif "arr_0" in data:
+            arr = data["arr_0"]
+        else:
+            arr = data[list(data.keys())[0]]
+        
+        if arr.ndim == 3 and arr.shape[0] in (3, 4, 13):
+            arr = np.moveaxis(arr, 0, -1)
+        return arr, None
+
+    else:
+        # Standard image (PNG, JPG, JPEG, BMP, WEBP)
+        pil_img = Image.open(io.BytesIO(uploaded_file.getvalue())).convert("RGB")
+        image = np.array(pil_img, dtype=np.uint8)
+        return image, None
+
 
 
 def compute_ndvi(image: np.ndarray) -> np.ndarray:
@@ -432,13 +456,14 @@ def main():
     st.sidebar.success(f"● {device_status}")
 
     preset_scene = st.sidebar.selectbox(
-        "Load Real Multi-Season Scene:",
+        "Load Scene or Upload Single Image:",
         [
             "Spring Agriculture (ROIs1158 Scene 01)",
             "Summer Mixed Coastal (ROIs1868 Scene 01)",
             "Fall Dense Urban (ROIs1970 Scene 01)",
             "Winter Mountain & Snow (ROIs2017 Scene 01)",
-            "Custom GeoTIFF Upload",
+            "Upload Single Image (LISS-IV / S2 / GeoTIFF / PNG / JPG)",
+            "Upload Multi-Modal Suite (Optical + SAR + DEM)",
         ],
     )
 
@@ -461,7 +486,7 @@ def main():
     image, profile = None, None
     sar_data, dem_data, clear_target = None, None, None
 
-    if preset_scene != "Custom GeoTIFF Upload":
+    if "Upload" not in preset_scene:
         raw_cloudy_list = sorted((RAW / "cloudy").glob("*.tif"))
         if raw_cloudy_list:
             if "Spring" in preset_scene:
@@ -499,25 +524,42 @@ def main():
                     if clear_target.ndim == 3:
                         clear_target = np.moveaxis(clear_target, 0, -1)
 
+    elif "Upload Single Image" in preset_scene:
+        st.markdown("""
+        <div style="background: rgba(59, 130, 246, 0.08); border: 1px solid rgba(59, 130, 246, 0.25); border-radius: 10px; padding: 14px; margin-bottom: 16px;">
+            <h4 style="margin: 0 0 6px 0; color: #60A5FA;">🛰️ Single-Image Cloud Removal Mode</h4>
+            <p style="margin: 0; font-size: 0.9rem; color: #94A3B8;">
+                Drop in <b>any single optical satellite image</b> (LISS-IV, Sentinel-2, Landsat, Drone, or standard PNG/JPG) containing clouds.
+                No paired SAR, temporal series, or DEM required — the neural spatial attention pipeline will automatically remove clouds and shadows.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        up_single = st.file_uploader(
+            "Upload Cloudy Image (GeoTIFF .tif/.tiff, .png, .jpg, .jpeg, .npz)",
+            type=["tif", "tiff", "png", "jpg", "jpeg", "bmp", "webp", "npz"]
+        )
+        if up_single is not None:
+            image, profile = read_uploaded_image(up_single)
+
     else:
-        st.markdown("#### 📂 Upload Custom Satellite GeoTIFF Scenes")
+        st.markdown("#### 📂 Multi-Modal Satellite Data Suite Upload")
         col_u1, col_u2, col_u3 = st.columns([2, 1, 1])
         with col_u1:
-            up_opt = st.file_uploader("Upload Optical Cloudy GeoTIFF (LISS-IV or Sentinel-2)", type=["tif", "tiff"])
+            up_opt = st.file_uploader("Upload Optical Cloudy Scene (LISS-IV / Sentinel-2)", type=["tif", "tiff", "png", "jpg", "npz"])
         with col_u2:
-            up_sar = st.file_uploader("Upload Sentinel-1 SAR GeoTIFF (optional)", type=["tif", "tiff"])
+            up_sar = st.file_uploader("Upload Sentinel-1 SAR (optional)", type=["tif", "tiff", "npz"])
         with col_u3:
-            up_dem = st.file_uploader("Upload Topographic DEM GeoTIFF (optional)", type=["tif", "tiff"])
+            up_dem = st.file_uploader("Upload Topographic DEM (optional)", type=["tif", "tiff", "npz"])
 
         if up_opt is not None:
-            image, profile = read_uploaded_geotiff(up_opt)
+            image, profile = read_uploaded_image(up_opt)
             if up_sar is not None:
-                sar_data, _ = read_uploaded_geotiff(up_sar)
+                sar_data, _ = read_uploaded_image(up_sar)
             if up_dem is not None:
-                dem_data, _ = read_uploaded_geotiff(up_dem)
+                dem_data, _ = read_uploaded_image(up_dem)
 
     if image is None:
-        st.info("👆 Select a preset scene from the sidebar or upload custom satellite imagery to begin.")
+        st.info("👆 Select a preset scene from the sidebar or upload any single cloudy image to begin.")
         return
 
     # -------------------------------------------------------------

@@ -265,9 +265,84 @@ def run_demo():
     print(f"[OK] QA PDF Reports saved to: {demo_output_reports}")
 
 
+def infer_single_image(input_path: Path, output_path: Path = None, device: str = "cpu"):
+    """Performs cloud removal on a single standalone optical image (LISS-IV, Sentinel-2, PNG, GeoTIFF)."""
+    input_path = Path(input_path)
+    if not input_path.exists():
+        print(f"[ERROR] Input file does not exist: {input_path}")
+        return None
+
+    print(f"\n[INFO] Processing single satellite image: {input_path.name}")
+    profile = None
+    if input_path.suffix.lower() in (".tif", ".tiff"):
+        with rasterio.open(input_path) as src:
+            image = src.read()
+            profile = src.profile.copy()
+        if image.ndim == 3:
+            if image.shape[0] == 13:
+                image = harmonize_s2_to_liss4(image, scale_toa=True)
+                if image.ndim == 3:
+                    image = np.moveaxis(image, 0, -1)
+            else:
+                image = np.moveaxis(image, 0, -1)
+        elif image.ndim == 2:
+            image = np.stack([image] * 3, axis=-1)
+    else:
+        from PIL import Image
+        pil_img = Image.open(input_path).convert("RGB")
+        image = np.array(pil_img, dtype=np.uint8)
+
+    model = CloudFreeInference(
+        device=device,
+        density_ckpt=CHECKPOINTS / "density_model" / "best_model.pth",
+        correction_ckpt=CHECKPOINTS / "correction_model" / "best_model.pth",
+        sar_ckpt=CHECKPOINTS / "diffusion_model" / "best_model.pth",
+        temporal_ckpt=CHECKPOINTS / "temporal_model" / "best_model.pth",
+    )
+
+    result = model.correct(image, data_max=1.0 if image.max() <= 1.0 else 65535.0 if image.dtype == np.uint16 else 255.0)
+
+    if output_path is None:
+        GEOTIFF_OUT.mkdir(parents=True, exist_ok=True)
+        if profile is not None:
+            output_path = GEOTIFF_OUT / f"cloud_free_{input_path.stem}.tif"
+        else:
+            output_path = GEOTIFF_OUT / f"cloud_free_{input_path.stem}.png"
+
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if profile is not None and output_path.suffix.lower() in (".tif", ".tiff"):
+        write_analysis_ready_product(
+            output_path, result["corrected"], result["confidence"],
+            result["ars"], profile
+        )
+    else:
+        from PIL import Image
+        corr_arr = result["corrected"]
+        if corr_arr.dtype == np.uint16:
+            corr_u8 = (corr_arr / 256.0).clip(0, 255).astype(np.uint8)
+        else:
+            corr_u8 = corr_arr.astype(np.uint8)
+        Image.fromarray(corr_u8).save(output_path)
+
+    grade = model.readiness.grade(result["ars"]["ars"])
+    print(f"\n[OK] Single Image Cloud Removal Completed Successfully!")
+    print(f"  - Output Saved: {output_path}")
+    print(f"  - ARS Score:    {result['ars']['ars']:.4f} (Grade: {grade})")
+    print(f"  - Mean Conf:    {result['confidence'].mean() * 100:.2f}%\n")
+    return output_path
+
+
 def main():
     parser = argparse.ArgumentParser(description="CloudReconstruct Data Pipeline")
     parser.add_argument("--demo", action="store_true", help="Run automated demonstration on reference scenes")
+    parser.add_argument("--infer-single", type=str, default=None,
+                        help="Path to a single optical image (LISS-IV, Sentinel-2, PNG, GeoTIFF) to process")
+    parser.add_argument("--output", type=str, default=None,
+                        help="Optional output path for single image inference")
+    parser.add_argument("--device", type=str, default="cuda",
+                        help="Inference device (cuda or cpu)")
     parser.add_argument("--step", type=str, default="all",
                         choices=["all", "download", "align", "mask", "patch", "infer", "benchmark"],
                         help="Pipeline step to run")
@@ -284,6 +359,10 @@ def main():
     Adaptive Multi-Source Cloud Removal for LISS-IV Imagery
     ==================================================================
     """)
+
+    if args.infer_single:
+        infer_single_image(Path(args.infer_single), args.output, device=args.device)
+        return
 
     if args.demo:
         run_demo()
@@ -315,3 +394,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
